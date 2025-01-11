@@ -3,6 +3,8 @@ import invariant from "tiny-invariant";
 import { BASIS_POINTS, Networks, ONE, ZERO, _1000, _997 } from "../constants";
 import { CurrencyAmount, Price } from "./fractions";
 import { Token } from "./token";
+import _ from "lodash";
+import { _1e11, _1e7, BONE, cPow, createFeeAdjustRatio, divCeil, scalar } from "./comet";
 
 // see https://stackoverflow.com/a/41102306
 const CAN_SET_PROTOTYPE = "setPrototypeOf" in Object;
@@ -35,10 +37,16 @@ export class InsufficientInputAmountError extends Error {
   }
 }
 
+export interface CometOpts {
+  weightA: JSBI,
+  weightB: JSBI,
+}
+
 export class Pair {
   public readonly liquidityToken: Token;
   private fee: number;
   private readonly tokenAmounts: [CurrencyAmount<Token>, CurrencyAmount<Token>];
+  private readonly cometOpts: CometOpts | null = null;
 
   public static getAddress(tokenA: Token, tokenB: Token): string {
     return `${tokenA} - ${tokenB} pair`;
@@ -48,6 +56,7 @@ export class Pair {
     currencyAmountA: CurrencyAmount<Token>,
     tokenAmountB: CurrencyAmount<Token>,
     fee: number = 30,
+    cometOpts: CometOpts | null = null, 
   ) {
     const tokenAmounts = currencyAmountA.currency.sortsBefore(
       tokenAmountB.currency
@@ -66,6 +75,14 @@ export class Pair {
       CurrencyAmount<Token>
     ];
     this.fee = fee;
+    if(cometOpts) {
+      this.cometOpts = {...cometOpts}
+
+      if(currencyAmountA.currency.equals(this.tokenAmounts[1].currency)) {
+        this.cometOpts.weightA = cometOpts.weightB;
+        this.cometOpts.weightB = cometOpts.weightA;
+      }
+    }
   }
 
   /**
@@ -135,7 +152,6 @@ export class Pair {
   }
 
   public reserveOf(token: Token): CurrencyAmount<Token> {
-    invariant(this.involvesToken(token), "TOKEN");
     return token.equals(this.token0) ? this.reserve0 : this.reserve1;
   }
 
@@ -309,6 +325,123 @@ export class Pair {
         )
       )
     ]
+  }
+
+  
+  private otherToken(token: Token): Token {
+    return token.equals(this.token0) ? this.token1 : this.token0;
+  }
+
+
+  private scaledReserve(token: Token): JSBI {
+      return JSBI.multiply(this.reserveOf(token).quotient, scalar);
+  }
+
+  private weightOf(token: Token): JSBI{
+    if(this.token0.equals(token)) {
+      return this.cometOpts!.weightA;
+    }else {
+      return this.cometOpts!.weightB;
+    }
+  }
+
+  private weightRatioOf(token: Token): JSBI{
+    return JSBI.divide(JSBI.multiply(this.weightOf(token), BONE), this.weightOf(this.otherToken(token)));
+  }
+
+  public getOutputAmountComet(
+    inputAmount: CurrencyAmount<Token>
+  ): [CurrencyAmount<Token>, Pair] {
+    invariant(this.involvesToken(inputAmount.currency), "TOKEN");
+    if (this.cometOpts === null) {
+      throw new Error("CometOpts is null");
+    }
+
+    if (
+      JSBI.equal(this.reserve0.quotient, ZERO) ||
+      JSBI.equal(this.reserve1.quotient, ZERO)
+    ) {
+      throw new InsufficientReservesError();
+    }
+
+    const tokenBalanceIn = this.scaledReserve(inputAmount.currency);
+    const tokenBalanceOut = this.scaledReserve(this.otherToken(inputAmount.currency));
+    const tokenAmountIn = JSBI.multiply(inputAmount.quotient, scalar);
+
+    const feeAdjustRatio = createFeeAdjustRatio(this.fee);
+
+    const adjustedIn = JSBI.divide(JSBI.multiply(tokenAmountIn, feeAdjustRatio), BONE);
+
+    const weightRatio = this.weightRatioOf(inputAmount.currency);
+
+    const base = JSBI.divide(JSBI.multiply(tokenBalanceIn, BONE), JSBI.add(tokenBalanceIn, adjustedIn));
+    const power = cPow(base, weightRatio);
+
+    const balanceRatio = JSBI.subtract(BONE, power);
+
+    const result = JSBI.divide(JSBI.multiply(tokenBalanceOut, balanceRatio), BONE);
+
+    const amountOut = JSBI.divide(result, scalar);
+
+    return [
+      CurrencyAmount.fromRawAmount(this.otherToken(inputAmount.currency), amountOut),
+      new Pair(
+        this.reserveOf(inputAmount.currency).add(inputAmount),
+        this.reserveOf(this.otherToken(inputAmount.currency)).subtract(
+          CurrencyAmount.fromRawAmount(this.otherToken(inputAmount.currency), amountOut)
+        ),
+        this.fee,
+        this.cometOpts
+      )
+    ]
+  }
+
+  public getInputAmountComet(
+    outputAmount: CurrencyAmount<Token>
+  ): [CurrencyAmount<Token>, Pair] {
+    invariant(this.involvesToken(outputAmount.currency), "TOKEN");
+    if (this.cometOpts === null) {
+      throw new Error("CometOpts is null");
+    }
+
+    if (
+      JSBI.equal(this.reserve0.quotient, ZERO) ||
+      JSBI.equal(this.reserve1.quotient, ZERO) ||
+      JSBI.greaterThanOrEqual(
+        outputAmount.quotient,
+        this.reserveOf(outputAmount.currency).quotient
+      )
+    ) {
+      throw new InsufficientReservesError();
+    }
+
+    const tokenBalanceIn = this.scaledReserve(this.otherToken(outputAmount.currency));
+    const tokenBalanceOut = this.scaledReserve(outputAmount.currency);
+    const tokenAmountOut = JSBI.multiply(outputAmount.quotient, scalar);
+
+    const feeAdjustRatio = createFeeAdjustRatio(this.fee);
+    const weightRatio = this.weightRatioOf(outputAmount.currency);
+
+    let base = divCeil(JSBI.multiply(tokenBalanceOut, BONE), JSBI.subtract(tokenBalanceOut, tokenAmountOut));
+    const power = cPow(base, weightRatio, true);
+    const balanceRatio = JSBI.subtract(power, BONE);
+
+    const amountWithoutFeeIn = divCeil(JSBI.multiply(tokenBalanceIn, balanceRatio), BONE);
+    const amountIn = divCeil(JSBI.divide(JSBI.multiply(amountWithoutFeeIn, BONE), feeAdjustRatio),scalar);
+
+    return [
+      CurrencyAmount.fromRawAmount(
+        this.otherToken(outputAmount.currency),
+        amountIn
+      ), new Pair(
+        this.reserveOf(outputAmount.currency).subtract(outputAmount),
+        this.reserveOf(this.otherToken(outputAmount.currency)).add(
+          CurrencyAmount.fromRawAmount(this.otherToken(outputAmount.currency), amountIn)
+        ),
+        this.fee,
+        this.cometOpts
+      ),
+    ];
   }
 
   public getInputAmount(

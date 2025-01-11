@@ -7,6 +7,7 @@ export enum Protocol {
   SOROSWAP = "soroswap",
   PHOENIX = "phoenix",
   AQUARIUS = "aquarius",
+  COMET = "comet",
 }
 
 export enum TradeType {

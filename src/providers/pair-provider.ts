@@ -5,6 +5,7 @@ import { contractInvoke } from "../utils/contractInvoke/contractInvoke";
 import { SorobanContextType } from "../utils/contractInvoke/types";
 import { parseScval } from "../utils/parseScvalAddress";
 import { GetPairsFns } from "../router/router";
+import JSBI from "jsbi";
 /**
  * @ignore
  * Represents a pair as returned from the API, including token addresses and reserves.
@@ -16,6 +17,7 @@ export interface PairFromApi {
   reserveB: string;
   protocol?: Protocol;
   fee?: string;
+  cometOpts?: {weightA: string, weightB: string};
 }
 
 /**
@@ -211,7 +213,8 @@ export class PairProvider {
           const pairInstance = new Pair(
             CurrencyAmount.fromRawAmount(token0, pair.reserveA),
             CurrencyAmount.fromRawAmount(token1, pair.reserveB),
-            pair.fee ? Number(pair.fee) : undefined
+            pair.fee ? Number(pair.fee) : undefined,
+            pair.cometOpts ? { weightA: JSBI.BigInt(pair.cometOpts.weightA), weightB: JSBI.BigInt(pair.cometOpts.weightB) } : null
           );
 
           return pairInstance;

@@ -106,6 +106,9 @@ export class QuoteProvider {
                 case Protocol.AQUARIUS:
                   [outputAmount] = pair.getOutputAmountAquarius(outputAmount);
                   break;
+                case Protocol.COMET:
+                  [outputAmount] = pair.getOutputAmountComet(outputAmount);
+                  break;
                 default:
                   throw new Error(`Protocol ${protocol} not supported`);
               }
@@ -129,6 +132,9 @@ export class QuoteProvider {
                   break;
                 case Protocol.AQUARIUS:
                   [inputAmount] = pair.getInputAmountAquarius(inputAmount);
+                  break;
+                case Protocol.COMET:
+                  [inputAmount] = pair.getInputAmountComet(inputAmount);
                   break;
                 default:
                   throw new Error(`Protocol ${protocol} not supported`);

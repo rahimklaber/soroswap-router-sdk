@@ -715,5 +715,60 @@ describe("Router", () => {
     // until the logic is updated to ensure a single hop for Phoenix
   });
 
+  it("should work with Comet", async () => {
+    const router = createRouter(
+      [
+        {
+          protocol: Protocol.COMET,
+          fn: async () => [
+            {
+              tokenA: "XLM_ADDRESS",
+              tokenB: "USDC_ADDRESS",
+              reserveA: "8000000000000",
+              reserveB: "2000000000000",
+              fee: "30",
+              cometOpts: {
+                weightA: "800000000000",
+                weightB: "200000000000",
+              }
+            }
+          ],
+        },
+        {
+          protocol: Protocol.SOROSWAP,
+          fn: async () => [
+            {
+              tokenA: "XLM_ADDRESS",
+              tokenB: "USDC_ADDRESS",
+              reserveA: "1000000000000",
+              reserveB: "1000000000000",
+              fee: "30",
+            }
+          ],
+        }
+      ],
+      [Protocol.COMET, Protocol.SOROSWAP]
+    );
+
+    const amountSplit = CurrencyAmount.fromRawAmount(XLM_TOKEN, 2_000_000);
+    const parts = 10;
+    quoteCurrency = USDC_TOKEN;
+    const route = await router.routeSplit(
+      amountSplit,
+      quoteCurrency,
+      TradeType.EXACT_INPUT,
+      parts
+    );
+    expect(route).not.toBeNull();
+
+    const cometDistribution = route.trade.distribution.find((d) => d.protocol_id === Protocol.COMET)!;
+    const soroswapDistribution = route.trade.distribution.find((d) => d.protocol_id === Protocol.SOROSWAP)!;
+
+    expect(route.trade.amountOutMin).toEqual("1993998"); // soroswap: 996999, comet: 996999
+    expect(cometDistribution?.parts).toEqual(5);
+    expect(soroswapDistribution?.parts).toEqual(5);
+
+  });
+
 });
 
